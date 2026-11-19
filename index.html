@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF 뷰어</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Mozilla PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background-color: #525659;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    canvas.pdf-page {
+      display: block;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+      background: #ffffff;
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden text-white">
+
+  <!-- 최소 상단 바 -->
+  <header class="h-12 bg-[#323639] border-b border-black/30 px-4 flex items-center justify-between shrink-0 z-10">
+    <div class="flex items-center gap-3 min-w-0">
+      <label for="pdf-input"
+        class="cursor-pointer px-3 py-1.5 rounded bg-neutral-700 hover:bg-neutral-600 text-xs font-medium text-white transition shrink-0">
+        PDF 파일 선택
+      </label>
+      <input id="pdf-input" type="file" accept="application/pdf" class="hidden" />
+      <span id="file-name" class="text-xs text-neutral-300 truncate">선택된 파일 없음</span>
+    </div>
+
+    <!-- 배율 및 페이지 정보 (파일 로드 시 표시) -->
+    <div id="viewer-controls" class="hidden items-center gap-2 text-xs text-neutral-200">
+      <span id="page-info" class="mr-2 text-neutral-300"></span>
+      <button id="zoom-out" class="px-2 py-1 rounded bg-neutral-700 hover:bg-neutral-600">-</button>
+      <span id="zoom-label" class="w-11 text-center">100%</span>
+      <button id="zoom-in" class="px-2 py-1 rounded bg-neutral-700 hover:bg-neutral-600">+</button>
+    </div>
+  </header>
+
+  <!-- 메인 뷰어 영역 (전체 화면 드래그 앤 드롭 지원) -->
+  <main id="drop-area" class="flex-1 overflow-auto bg-[#525659] relative">
+    <!-- 초기 안내 문구 -->
+    <div id="empty-state" class="h-full flex flex-col items-center justify-center text-neutral-200 text-sm p-6 text-center select-none">
+      <p class="mb-3">상단의 <strong>PDF 파일 선택</strong> 버튼을 누르거나 PDF 파일을 화면에 드래그하세요.</p>
+    </div>
+
+    <!-- 원본 PDF 페이지 렌더링 컨테이너 -->
+    <div id="pdf-container" class="hidden py-6 px-4 flex flex-col items-center gap-4"></div>
+  </main>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const pdfInput = document.getElementById('pdf-input');
+    const dropArea = document.getElementById('drop-area');
+    const emptyState = document.getElementById('empty-state');
+    const pdfContainer = document.getElementById('pdf-container');
+    const fileNameEl = document.getElementById('file-name');
+    const viewerControls = document.getElementById('viewer-controls');
+    const pageInfoEl = document.getElementById('page-info');
+    const zoomLabel = document.getElementById('zoom-label');
+
+    let currentPdf = null;
+    let currentScale = 1.25;
+
+    // 파일 선택
+    pdfInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) openPdf(file);
+    });
+
+    // 전체 뷰포트 드래그 앤 드롭
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && file.type === 'application/pdf') {
+        openPdf(file);
+      }
+    });
+
+    // 확대/축소 버튼
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      if (!currentPdf) return;
+      currentScale = Math.min(3.0, +(currentScale + 0.25).toFixed(2));
+      renderPages();
+    });
+
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      if (!currentPdf) return;
+      currentScale = Math.max(0.5, +(currentScale - 0.25).toFixed(2));
+      renderPages();
+    });
+
+    // PDF 파일 로드
+    async function openPdf(file) {
+      try {
+        fileNameEl.textContent = file.name;
+        const buffer = await file.arrayBuffer();
+        currentPdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
+        emptyState.classList.add('hidden');
+        pdfContainer.classList.remove('hidden');
+        viewerControls.classList.remove('hidden');
+        viewerControls.classList.add('flex');
+        pageInfoEl.textContent = `총 ${currentPdf.numPages}페이지`;
+
+        await renderPages();
+      } catch (err) {
+        fileNameEl.textContent = 'PDF 파일을 불러오지 못했습니다.';
+      }
+    }
+
+    // 모든 페이지를 원본 PDF 그대로 캔버스에 렌더링
+    async function renderPages() {
+      if (!currentPdf) return;
+      pdfContainer.innerHTML = '';
+      zoomLabel.textContent = `${Math.round((currentScale / 1.25) * 100)}%`;
+
+      const dpr = window.devicePixelRatio || 1;
+
+      for (let num = 1; num <= currentPdf.numPages; num++) {
+        const page = await currentPdf.getPage(num);
+        const viewport = page.getViewport({ scale: currentScale });
+
+        const canvas = document.createElement('canvas');
+        canvas.className = 'pdf-page';
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        pdfContainer.appendChild(canvas);
+
+        await page.render({
+          canvasContext: ctx,
+          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+          viewport
+        }).promise;
+      }
+    }
+  </script>
+</body>
+</html>
